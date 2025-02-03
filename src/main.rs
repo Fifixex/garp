@@ -1,8 +1,23 @@
 use std::env;
+type Result<T> = std::result::Result<T, &'static str>;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let config = Config::build(&args)?;
+
+    if let Err(e) = run(config) {
+        return Err(e);
+    }
+
+    Ok(())
+}
+
+fn run(config: Config) -> Result<()> {
+    #[cfg(feature = "non-local")]
+    if !matches!(config.host.as_str(), "localhost" | "127.0.0.1") {
+        return Err("Non-local hosts are not allowed");
+    }
+
     println!("Host: {}\nPort: {}", config.host, config.port);
     Ok(())
 }
@@ -15,9 +30,9 @@ struct Config {
 }
 
 impl Config {
-    fn build(args: &[String]) -> Result<Config, &'static str> {
+    fn build(args: &[String]) -> Result<Config> {
         if args.len() < 3 {
-            return Err("not enough arguments");
+            return Err("Not enough arguments");
         }
 
         let host = args[1].clone();
