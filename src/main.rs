@@ -1,43 +1,14 @@
-use std::env;
-type Result<T> = std::result::Result<T, &'static str>;
+use garp::Config;
+use std::{env, process};
 
-fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
-    let config = Config::build(&args)?;
+fn main() {
+    let config = Config::build(env::args().skip(1)).unwrap_or_else(|err| {
+        eprintln!("Problem parsing arguments: {err}");
+        process::exit(1);
+    });
 
-    if let Err(e) = run(config) {
-        return Err(e);
-    }
-
-    Ok(())
-}
-
-fn run(config: Config) -> Result<()> {
-    #[cfg(feature = "non-local")]
-    if !matches!(config.host.as_str(), "localhost" | "127.0.0.1") {
-        return Err("Non-local hosts are not allowed");
-    }
-
-    println!("Host: {}\nPort: {}", config.host, config.port);
-    Ok(())
-}
-
-// I know this is improvable but I'm following the rust book I/O project
-// plz wait without complaining until I finish the book
-struct Config {
-    host: String,
-    port: String,
-}
-
-impl Config {
-    fn build(args: &[String]) -> Result<Config> {
-        if args.len() < 3 {
-            return Err("Not enough arguments");
-        }
-
-        let host = args[1].clone();
-        let port = args[2].clone();
-
-        Ok(Config { host, port })
+    if let Err(e) = garp::run(config) {
+        eprintln!("Application error: {e}");
+        process::exit(1);
     }
 }
