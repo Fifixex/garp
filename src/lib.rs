@@ -25,6 +25,10 @@ pub fn run(config: Config) -> Result<()> {
         return Err("Non-local hosts are not allowed");
     }
 
+    if config.port.parse::<u16>().is_err() || config.port.len() < 4 {
+        return Err("Port is not a number or is too short");
+    }
+
     println!("Host: {}\nPort: {}", config.host, config.port);
     #[cfg(windows)]
     if let Err(e) = dx12() {
