@@ -1,3 +1,8 @@
+#[cfg(windows)]
+pub mod dx12;
+#[cfg(windows)]
+use dx12::dx12;
+
 type Result<T> = std::result::Result<T, &'static str>;
 
 pub struct Config {
@@ -20,6 +25,15 @@ pub fn run(config: Config) -> Result<()> {
         return Err("Non-local hosts are not allowed");
     }
 
+    if config.port.parse::<u16>().is_err() || config.port.len() < 4 {
+        return Err("Port is not a number or is too short");
+    }
+
     println!("Host: {}\nPort: {}", config.host, config.port);
+    #[cfg(windows)]
+    if let Err(e) = dx12() {
+        eprintln!("{e}");
+    }
+
     Ok(())
 }
