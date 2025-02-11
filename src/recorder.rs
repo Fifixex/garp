@@ -98,3 +98,38 @@ pub struct Frame {
     pub width: u32,
     pub height: u32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recorder() {
+        let video_recorder = Arc::new(VideoRecorder::new().expect("Failed to create VideoRecorder"));
+
+        let finished = Arc::new((Mutex::new(false), Condvar::new()));
+        let recorder_clone = Arc::clone(&video_recorder);
+        let finished_clone = Arc::clone(&finished);
+
+        thread::spawn(move || {
+            recorder_clone
+                .on_frame(move |frame| {
+                    println!("frame: {:?}", frame.width);
+                    let (lock, cvar) = &*finished_clone;
+                    let mut done = lock.lock().unwrap();
+                    *done = true;
+                    cvar.notify_one();
+                    Ok(())
+                })
+                .expect("Failed to process frame");
+        });
+
+        let (lock, cvar) = &*finished;
+        let mut done = lock.lock().unwrap();
+        while !*done {
+            done = cvar.wait(done).unwrap();
+        }
+
+        assert!(video_recorder.has_frame(), "Expected a valid frame to be captured.");
+    }
+}
