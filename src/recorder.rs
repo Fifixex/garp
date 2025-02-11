@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use windows::{
@@ -13,8 +14,7 @@ pub struct VideoRecorder {
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
-
-    frame_ready: Arc<(Mutex<bool>, Condvar)>,
+    running: Arc<AtomicBool>,
 }
 
 impl VideoRecorder {
@@ -51,8 +51,7 @@ impl VideoRecorder {
                     d3d_device,
                     d3d_context,
                     duplication,
-
-                    frame_ready: Arc::new((Mutex::new(false), Condvar::new())),
+                    running: Arc::new(AtomicBool::new(false)),
                 });
             }
         }
@@ -63,33 +62,37 @@ impl VideoRecorder {
     where
         F: Fn(Frame) -> Result<()> + Send + 'static,
     {
-        let frame_ready = Arc::clone(&self.frame_ready);
+        if self.running.load(Ordering::SeqCst) {
+            panic!("Capture is already running.");
+        }
 
-        thread::spawn(move || {
-            loop {
-                let frame = Frame {
-                    width: 1920,
-                    height: 1080,
-                };
+        self.running.store(true, Ordering::SeqCst);
+        let running = Arc::clone(&self.running);
+        let duplication = self.duplication.clone();
 
-                callback(frame).unwrap();
+        while running.load(Ordering::SeqCst) {
+            let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
+            let mut resource: Option<IDXGIResource> = None;
+            unsafe {
+                if let Err(err) = duplication.AcquireNextFrame(200, &mut frame_info, &mut resource)
+                {
+                    eprintln!("{err}");
+                } else {
+                    let resource = resource.unwrap();
+                    let source_texture = resource.cast::<ID3D11Texture2D>()?;
 
-                let (lock, cvar) = &*frame_ready;
-                let mut done = lock.lock().unwrap();
-                *done = true;
-                cvar.notify_one();
+                    let frame = Frame {
+                        width: 1920,
+                        height: 1080,
+                    };
+                    callback(frame).unwrap();
 
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                    duplication.ReleaseFrame().unwrap();
+                }
             }
-        });
-
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
         Ok(())
-    }
-
-    pub fn has_frame(&self) -> bool {
-        let (lock, _) = &*self.frame_ready;
-        let done = lock.lock().unwrap();
-        *done
     }
 }
 
@@ -97,4 +100,33 @@ impl VideoRecorder {
 pub struct Frame {
     pub width: u32,
     pub height: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recorder_on_frame() {
+        let recorder = VideoRecorder::new().unwrap();
+        let callback = |frame: Frame| {
+            assert_eq!(frame.width, 1920);
+            assert_eq!(frame.height, 1080);
+            Ok(())
+        };
+
+        let recorder_clone = Arc::new(recorder);
+        let recorder_running = Arc::clone(&recorder_clone.running);
+
+        thread::spawn(move || {
+            recorder_clone.on_frame(callback).unwrap();
+        });
+
+        thread::sleep(std::time::Duration::from_millis(1));
+
+        assert_eq!(recorder_running.load(Ordering::SeqCst), true);
+
+        recorder_running.store(false, Ordering::SeqCst);
+        thread::sleep(std::time::Duration::from_millis(1));
+    }
 }

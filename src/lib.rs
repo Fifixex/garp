@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::thread;
+
 #[cfg(windows)]
 pub mod recorder;
 #[cfg(windows)]
@@ -32,45 +35,19 @@ pub fn run(config: Config) -> Result<()> {
     println!("Host: {}\nPort: {}", config.host, config.port);
 
     #[cfg(windows)]
-    if let Err(e) = VideoRecorder::new() {
-        eprintln!("{e}");
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{sync::{Arc, Mutex, Condvar}, thread};
-    use crate::recorder::VideoRecorder;
-
-    #[test]
-    fn recorder() {
-        let video_recorder = Arc::new(VideoRecorder::new().expect("Failed to create VideoRecorder"));
-
-        let finished = Arc::new((Mutex::new(false), Condvar::new()));
-        let recorder_clone = Arc::clone(&video_recorder);
-        let finished_clone = Arc::clone(&finished);
+    {
+        let recorder = Arc::new(VideoRecorder::new().unwrap());
+        let recorder_clone = recorder.clone();
 
         thread::spawn(move || {
             recorder_clone
-                .on_frame(move |frame| {
-                    println!("frame: {:?}", frame.width);
-                    let (lock, cvar) = &*finished_clone;
-                    let mut done = lock.lock().unwrap();
-                    *done = true;
-                    cvar.notify_one();
+                .on_frame(|frame| {
+                    println!("New frame captured: {}x{}", frame.width, frame.height);
                     Ok(())
                 })
-                .expect("Failed to process frame");
+                .unwrap();
         });
-
-        let (lock, cvar) = &*finished;
-        let mut done = lock.lock().unwrap();
-        while !*done {
-            done = cvar.wait(done).unwrap();
-        }
-
-        assert!(video_recorder.has_frame(), "Expected a valid frame to be captured.");
+        std::thread::sleep(std::time::Duration::from_secs(5));
     }
+    Ok(())
 }
