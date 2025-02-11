@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::thread;
+
 #[cfg(windows)]
 pub mod recorder;
 #[cfg(windows)]
@@ -32,9 +35,19 @@ pub fn run(config: Config) -> Result<()> {
     println!("Host: {}\nPort: {}", config.host, config.port);
 
     #[cfg(windows)]
-    if let Err(e) = VideoRecorder::new() {
-        eprintln!("{e}");
-    }
+    {
+        let recorder = Arc::new(VideoRecorder::new().unwrap());
+        let recorder_clone = recorder.clone();
 
+        thread::spawn(move || {
+            recorder_clone
+                .on_frame(|frame| {
+                    println!("New frame captured: {}x{}", frame.width, frame.height);
+                    Ok(())
+                })
+                .unwrap();
+        });
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
     Ok(())
 }
