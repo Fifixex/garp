@@ -2,11 +2,27 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
+use image::RgbaImage;
 use windows::{
     Win32::Foundation::HMODULE,
     Win32::Graphics::{Direct3D::D3D_DRIVER_TYPE_HARDWARE, Direct3D11::*, Dxgi::*},
     core::{Interface, Result},
 };
+
+#[inline]
+fn save_frame_to_img(frame: &Frame, data: &[u8], filename: &str) -> Result<()> {
+    let mut dst = Vec::with_capacity(data.len());
+    for chunk in data.chunks_exact(4) {
+        dst.push(chunk[2]);
+        dst.push(chunk[1]);
+        dst.push(chunk[0]);
+        dst.push(chunk[3]);
+    }
+
+    let img = RgbaImage::from_raw(frame.width, frame.height, dst.to_vec()).ok_or("Failed to create image buffer from raw data").unwrap();
+    img.save(filename).unwrap();
+    Ok(())
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -57,6 +73,42 @@ impl VideoRecorder {
         }
     }
 
+    unsafe fn get_frame_data(&self, source_texture: &ID3D11Texture2D) -> Result<Vec<u8>> {
+      unsafe {
+        let mut source_desc = D3D11_TEXTURE2D_DESC::default();
+        source_texture.GetDesc(&mut source_desc);
+        source_desc.BindFlags = 0;
+        source_desc.MiscFlags = 0;
+        source_desc.Usage = D3D11_USAGE_STAGING;
+        source_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+
+        let copy_texture = {
+              let mut texture = None;
+              self.d3d_device.CreateTexture2D(&source_desc, None, Some(&mut texture))?;
+              texture.ok_or("CreateTexture2D failed").unwrap()
+        };
+        self.d3d_context.CopyResource(Some(&copy_texture.cast()?), Some(&source_texture.cast()?));
+        let resource: ID3D11Resource = copy_texture.cast()?;
+
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        self.d3d_context.Map(
+            Some(&resource.clone()),
+            0,
+            D3D11_MAP_READ,
+            0,
+            Some(&mut mapped),
+        )?;
+
+        let data_size = (mapped.RowPitch as usize) * (source_desc.Height as usize);
+        let src_ptr = mapped.pData.cast();
+        let data = std::slice::from_raw_parts(src_ptr, data_size).to_vec();
+
+        self.d3d_context.Unmap(Some(&resource), 0);
+
+        Ok(data)
+      }
+    }
+
     #[track_caller]
     pub fn on_frame<F>(&self, callback: F) -> Result<()>
     where
@@ -77,16 +129,17 @@ impl VideoRecorder {
                 if let Err(err) = duplication.AcquireNextFrame(200, &mut frame_info, &mut resource)
                 {
                     eprintln!("{err}");
+                    duplication.ReleaseFrame().unwrap();
                 } else {
-                    let resource = resource.unwrap();
-                    let source_texture = resource.cast::<ID3D11Texture2D>()?;
-
-                    let frame = Frame {
-                        width: 1920,
-                        height: 1080,
-                    };
-                    callback(frame).unwrap();
-
+                    if frame_info.LastPresentTime != 0 {
+                        let resource = resource.unwrap();
+                        let source_texture = resource.cast::<ID3D11Texture2D>()?;
+                        let buffer = self.get_frame_data(&source_texture)?;
+                        let frame = Frame { width: 1920, height: 1080 };
+                        let filename = format!("frame-{}.png", chrono::Utc::now().timestamp_millis());
+                        let _ = save_frame_to_img(&frame, &buffer, &filename);
+                        callback(frame).unwrap();
+                    }
                     duplication.ReleaseFrame().unwrap();
                 }
             }
